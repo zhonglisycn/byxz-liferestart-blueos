@@ -1,0 +1,328 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="back">返回</text>
+      <text class="t-title">档案</text>
+      <text class="t-nav-r" @click="goCodex">图鉴</text>
+    </div>
+
+    <!-- 上半（收集度 / 最近结局）可滚动；三个存档槽与读写按钮固定在底部，不进滚动区 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px">
+      <!-- 收集度：已得 / 总数 + 进度条 + 百分比（点卡片进图鉴） -->
+      <div class="card {{press === 'codex' ? 'card-press' : ''}}"
+           @touchstart="down('codex')" @touchend="up" @touchcancel="up" @click="goCodex">
+        <div class="card-row">
+          <text class="card-t">词条图鉴</text>
+          <text class="card-v">{{got}} / {{denom}} 条</text>
+        </div>
+        <div class="pbar">
+          <div class="pfill" style="width: {{barW}}px"></div>
+        </div>
+        <text class="card-sub">已收集 {{pct}}% · 点此查看全部词条 / 事件 / 结局</text>
+      </div>
+
+      <!-- 最近一次结局与评级：没有就显示占位 -->
+      <div class="card" if="{{hasLast}}">
+        <div class="card-row">
+          <text class="card-t">最近结局</text>
+          <text class="rk {{last.cls}}">{{last.letter}} · {{last.rankName}}</text>
+        </div>
+        <text class="card-sub">{{last.line}}</text>
+      </div>
+      <div class="card" if="{{!hasLast}}">
+        <div class="card-row">
+          <text class="card-t">最近结局</text>
+          <text class="card-v">暂无</text>
+        </div>
+        <text class="card-sub">还没有结算过一局人生</text>
+      </div>
+
+      <text class="hint">删除要连按两次「确认删除」；空档位回首页「重开人生」即可开局</text>
+    </scroll>
+
+    <text class="sec slot-sec">存档槽 · 点卡片选中，再按「读取」继续</text>
+
+    <!-- 三个槽位固定在底部（高 3×70 + 两处 7px 空隙，space-between 分配）：读取/删除不用滚动就能点到 -->
+    <div class="slots" style="height: {{slotsH}}px">
+      <div class="slot {{$item.cls}}" for="{{slotCards}}" style="height: {{slotH}}px">
+        <div class="slot-main" @click="pick($item.id)">
+          <div class="slot-row">
+            <text class="slot-t">{{$item.label}}</text>
+            <text class="slot-tag">{{$item.tag}}</text>
+          </div>
+          <text class="slot-s">{{$item.sub}}</text>
+        </div>
+        <div class="slot-acts">
+          <div class="sbtn {{$item.canRead ? 'sbtn-read' : 'sbtn-off'}} {{press === $item.rKey ? 'pressed' : ''}}"
+               @touchstart="down($item.rKey)" @touchend="up" @touchcancel="up" @click="read($item.id)">
+            <text class="t-sbtn">读取</text>
+          </div>
+          <div class="h-gap"></div>
+          <div class="sbtn {{$item.confirming ? 'sbtn-danger' : 'sbtn-del'}} {{press === $item.dKey ? 'pressed' : ''}}"
+               @touchstart="down($item.dKey)" @touchend="up" @touchcancel="up" @click="askDelete($item.id)">
+            <text class="t-sbtn">{{$item.delText}}</text>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { archiveView } from '../../common/core/views.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { toast } from '../../common/core/toast.js'
+  import { go, back as navBack } from '../../common/core/nav.js'
+
+  /** 本页高度总账（纯函数）：上半滚动，三个存档槽固定在底部（读写按钮不进滚动区） */
+  const LAY = layoutOf('Archive')
+
+  export default {
+    data: {
+      got: 0,
+      denom: 0,
+      pct: 0,
+      barW: 0,
+      hasLast: false,
+      last: { cls: 'rk1', letter: 'D', rankName: '平凡', line: '' },
+      slotCards: [],
+      confirmId: '',
+      press: '',
+      timer: null,
+      // 高度来自 common/core/layout.js（432×514 总账），不手写
+      zoneH: LAY.blocks.zone,
+      slotsH: LAY.blocks.slots,
+      slotH: LAY.blocks.slotH
+    },
+
+    onInit() {
+      app.attach(this)
+      this.sync()
+    },
+
+    // 从图鉴/人生页返回时刷新：收集度、最近结局、槽位都可能刚变过
+    onShow() {
+      app.attach(this)
+      this.sync()
+      // 冷启动时存档还在异步读：读完补刷一次（定时器在 onHide/onDestroy 清掉）
+      if (!app.loaded) {
+        const self = this
+        this.clearTimer()
+        this.timer = setTimeout(function () { self.timer = null; self.sync() }, 260)
+      }
+    },
+
+    onHide() {
+      this.clearTimer()
+      this.confirmId = ''
+    },
+
+    onDestroy() {
+      this.clearTimer()
+      this.confirmId = ''
+    },
+
+    clearTimer() {
+      if (this.timer) { clearTimeout(this.timer); this.timer = null }
+    },
+
+    /* ---------------- 渲染数据（拼装逻辑在 views.js，有单测） ---------------- */
+    sync() {
+      const v = archiveView({
+        slots: app.slots,
+        slot: app.slot,
+        last: app.last,
+        codexSeen: app.codexSeen
+      }, this.confirmId)
+      this.got = v.got
+      this.denom = v.denom
+      this.pct = v.pct
+      this.barW = v.barW
+      this.hasLast = v.hasLast
+      this.last = v.last
+      this.slotCards = v.slotCards
+    },
+
+    /* ---------------- 按压态 ---------------- */
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    /* ---------------- 槽位操作 ---------------- */
+    pick(id) {
+      app.tap()
+      this.confirmId = ''
+      app.selectSlot(id)
+      this.sync()
+    },
+
+    /** 读取：选中的槽要真的有活着的存档（空档只提示，不切走） */
+    read(id) {
+      app.tap()
+      this.confirmId = ''
+      const card = this.cardOf(id)
+      if (!card || !card.canRead) {
+        toast('空档 · 没有可读取的人生')
+        this.sync()
+        return
+      }
+      app.selectSlot(id)
+      go('pages/Life', true)
+    },
+
+    /** 两段式删除：第一次点只是变成「确认删除」（4 秒内有效），再点一次才真删 */
+    askDelete(id) {
+      app.tap()
+      if (this.confirmId === id) {
+        this.clearTimer()
+        this.confirmId = ''
+        app.clearRun(id)
+        toast('已删除该存档')
+        this.sync()
+        return
+      }
+      this.confirmId = id
+      this.armConfirm()
+      this.sync()
+    },
+
+    /** 二次确认的 4 秒时限：到点自动还原成「删除」，避免一直挂着 */
+    armConfirm() {
+      const self = this
+      this.clearTimer()
+      this.timer = setTimeout(function () {
+        self.timer = null
+        if (self.confirmId) {
+          self.confirmId = ''
+          self.sync()
+        }
+      }, 4000)
+    },
+
+    cardOf(id) {
+      for (let i = 0; i < this.slotCards.length; i++) {
+        if (this.slotCards[i].id === id) return this.slotCards[i]
+      }
+      return null
+    },
+
+    goCodex() {
+      app.tap()
+      go('pages/Codex', false)
+    },
+
+    back() { navBack() }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* ---------- 卡片 ---------- */
+  .card {
+    width: 100%;
+    border-radius: 16px;
+    background-color: #1b1e24;
+    padding: 7px 14px 9px 14px;
+    margin-bottom: 8px;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .card-press { background-color: #272c35; }
+
+  .card-row {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .card-t { font-size: 22px; color: #c9a86a; font-weight: bold; }
+  .card-v { font-size: 21px; color: #f0e6d2; }
+  .card-sub { font-size: 18px; color: #9aa0a8; margin-top: 4px; }
+
+  .rk { font-size: 22px; font-weight: bold; }
+  .rk1 { color: #a8adb5; }
+  .rk2 { color: #6fcf97; }
+  .rk3 { color: #7fb3ff; }
+  .rk4 { color: #bb86fc; }
+  .rk5 { color: #ffc857; }
+
+  /* ---------- 收集度进度条（与首页旧版同款：固定宽度轨道 + px 填充） ---------- */
+  .pbar {
+    width: 376px;
+    height: 12px;
+    border-radius: 6px;
+    background-color: #2b2f36;
+    flex-direction: row;
+    flex-shrink: 0;
+    margin-top: 6px;
+  }
+
+  .pfill {
+    height: 12px;
+    border-radius: 6px;
+    background-color: #c9a86a;
+    flex-shrink: 0;
+  }
+
+  /* ---------- 存档槽（固定在底部，不进滚动区） ---------- */
+  .slots {
+    width: 100%;
+    height: 224px;
+    flex-direction: column;
+    justify-content: space-between;
+    margin-top: 4px;
+    flex-shrink: 0;
+  }
+
+  /* 存档槽标题：固定 30px（.sec 自带的上下外边距在这里清零） */
+  .slot-sec { height: 30px; margin-top: 0; margin-bottom: 0; }
+
+  .zone { margin-top: 2px; }
+
+  .slot {
+    width: 100%;
+    height: 70px;
+    border-radius: 16px;
+    background-color: #1b1e24;
+    border: 2px solid #23262b;
+    flex-direction: row;
+    align-items: center;
+    padding-left: 14px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .slot-on { background-color: #22331f; border: 2px solid #6fcf97; }
+  .slot-empty { background-color: #17191e; }
+  .slot-main { flex: 1; flex-direction: column; justify-content: center; }
+  .slot-row { width: 100%; flex-direction: row; align-items: center; flex-shrink: 0; }
+  .slot-t { font-size: 20px; color: #f0e6d2; }
+  .slot-tag { font-size: 16px; color: #6fcf97; margin-left: 8px; }
+  .slot-s { font-size: 18px; color: #9aa0a8; margin-top: 3px; }
+
+  .slot-acts { width: 158px; flex-direction: row; align-items: center; flex-shrink: 0; }
+
+  .sbtn {
+    width: 74px;
+    height: 46px;
+    border-radius: 23px;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .sbtn-read { background-color: #2e5d34; }
+  .sbtn-off { background-color: #23262b; }
+  .sbtn-del { background-color: #33262a; }
+  .sbtn-danger { background-color: #b23c3c; }
+  .t-sbtn { font-size: 19px; color: #ffffff; text-align: center; width: 100%; }
+
+  /* 按压态（touch 事件切 class，不用动画 API） */
+  .pressed { background-color: #7a6438; }
+
+  .hint { font-size: 16px; color: #6b7078; margin-top: 2px; margin-bottom: 6px; }
+</style>

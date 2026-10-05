@@ -1,0 +1,86 @@
+/* 人生重开 · 修仙（vivo 手表移植版） · 公共样式
+   432×514 方屏，designWidth 432 → 样式里的 px 就是物理像素。
+   只用运行时真支持的属性（对照编译产物 template.json）：
+   宽高/flex/方向/对齐/内边距/外边距/圆角/背景/字号/颜色/粗细/文本对齐/minHeight。
+   没有 flex-wrap、没有 overflow、line-height 不生效——要换行就写静态行。 */
+
+.page {
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background-color: #0d0f12;
+  padding: 10px 14px 12px 14px;
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar {
+  width: 100%;
+  height: 50px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.t-title { font-size: 30px; color: #f0e6d2; font-weight: bold; text-align: center; }
+.t-nav { font-size: 24px; color: #c9a86a; }
+.t-nav-r { font-size: 24px; color: #c9a86a; text-align: right; }
+
+/* ---------- 文字 ---------- */
+.t-body { font-size: 23px; color: #b9bec6; }
+.t-dim { font-size: 20px; color: #8b8f96; }
+.t-white { color: #f0e6d2; }
+.t-gold { color: #c9a86a; }
+.t-ok { color: #6fcf97; }
+.t-warn { color: #ff8a65; }
+.t-purple { color: #bb86fc; }
+.t-blue { color: #7fb3ff; }
+
+/* ---------- 布局 ---------- */
+.row { flex-direction: row; align-items: center; }
+.col { flex-direction: column; }
+.grow { flex: 1; }
+.center { align-items: center; justify-content: center; }
+.scroll { width: 100%; flex: 1; flex-direction: column; }
+.h-gap { width: 10px; }
+.v-gap { height: 8px; }
+
+/* 状态条：一行放两组信息 */
+.status {
+  width: 100%;
+  height: 34px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* ---------- 卡片 ---------- */
+.card {
+  width: 100%;
+  border-radius: 16px;
+  background-color: #1b1e24;
+  flex-shrink: 0;
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+  height: 64px;
+  border-radius: 32px;
+  background-color: #3a3f47;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.btn-primary { background-color: #4caf50; }
+.btn-quiet { background-color: #4a4f57; }
+.btn-off { background-color: #23262b; }
+.t-btn { font-size: 27px; color: #ffffff; text-align: center; width: 100%; }
+.t-btn-off { font-size: 27px; color: #6b7078; text-align: center; width: 100%; }
+.btn-row { flex-direction: row; width: 100%; flex-shrink: 0; }
+
+/* ---------- 章节标题 / 列表行 ---------- */
+.sec { font-size: 24px; color: #c9a86a; font-weight: bold; margin-top: 10px; margin-bottom: 4px; }
+.line { font-size: 23px; color: #b9bec6; margin-top: 3px; }
+/* for 只挂 div（官方模板里 for 从没挂过 text），文字行外面套一层 */
+.line-row { width: 100%; flex-direction: column; flex-shrink: 0; }

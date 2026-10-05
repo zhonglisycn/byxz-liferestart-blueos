@@ -1,0 +1,9 @@
+package.json
+manifest.json
+README.md
+
+# 内容池：原作搬运的纯数据模块，不按代码规范要求（649 条词条 / 1065 条事件）
+src/common/core/content/
+
+# 打包前生成的图鉴索引（tools/gen-stats.mjs 产出，含大量转义字符串，不手改）
+src/common/core/codex-index.js

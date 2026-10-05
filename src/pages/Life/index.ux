@@ -1,0 +1,426 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="finish">结束</text>
+      <text class="t-title">{{age}} 岁</text>
+      <text class="t-nav-r" @click="toggleAuto">{{auto ? '暂停' : '自动'}}</text>
+    </div>
+
+    <!-- 顶部一行：当前境界 / 修为进度（有体系时）+ 寿元 -->
+    <div class="realmline" if="{{!noData && hasPath}}">
+      <text class="realm {{pathCls}}">{{realmText}}</text>
+      <div class="rbar">
+        <div class="rfill {{pathCls}}-fill" style="width: {{realmW}}px"></div>
+      </div>
+      <text class="resv">{{resText}}</text>
+    </div>
+
+    <div class="status" if="{{!noData}}">
+      <text class="t-body">{{attrText}}</text>
+      <text class="t-dim">{{lifeText}}</text>
+    </div>
+
+    <div class="pathline" if="{{!noData && !info}}" @click="showInfo">
+      <text class="path-t">{{dualText}}</text>
+      <text class="path-h">词条与物品 ›</text>
+    </div>
+
+    <!-- 中段唯一可滚动区（事件卡 + 历程）；底部按钮在 scroll 之外 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px" if="{{!noData && !info}}">
+      <!-- 当前事件卡：按类型配色（机遇/危机/奇遇/体系）+ 年代标记 + 变化高亮 -->
+      <div class="now">
+        <div class="now-head">
+          <text class="now-badge">{{cur.age}} 岁</text>
+          <text class="now-kind {{cur.toneCls}}">{{cur.toneName}}</text>
+          <text class="now-title {{cur.toneCls}}">{{cur.title}}</text>
+        </div>
+        <text class="now-text">{{cur.text}}</text>
+        <div class="chg-row" for="{{cur.changes}}">
+          <text class="chg {{$item.cls}}">{{$item.text}}</text>
+        </div>
+      </div>
+
+      <text class="sec">历程</text>
+      <div class="log-row" for="{{logs}}">
+        <text class="log-age {{$item.cls}}">{{$item.age}}岁</text>
+        <text class="log-text">{{$item.line}}</text>
+      </div>
+      <text class="log-end" if="{{noLog}}">（还没有往事）</text>
+    </scroll>
+
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px" if="{{!noData && info}}">
+      <text class="sec">本局词条</text>
+      <div class="line-row" for="{{talentLines}}">
+        <text class="line">{{$item}}</text>
+      </div>
+      <text class="sec">随身之物</text>
+      <div class="line-row" for="{{itemLines}}">
+        <text class="line">{{$item}}</text>
+      </div>
+    </scroll>
+
+    <div class="btn next {{auto ? 'btn-quiet' : 'btn-primary'}} {{press === 'next' ? 'pressed' : ''}} {{auto && dot === 1 ? 'btn-flash' : ''}}"
+         style="height: {{btnH}}px"
+         if="{{!noData && !info}}" @touchstart="down('next')" @touchend="up" @touchcancel="up" @click="next">
+      <text class="t-btn">{{auto ? ('进行中 ' + dots) : '下一年'}}</text>
+    </div>
+    <div class="btn next btn-quiet" style="height: {{btnH}}px" if="{{!noData && info}}" @click="hideInfo">
+      <text class="t-btn">返回人生</text>
+    </div>
+
+    <!-- 数据兜底：没有进行中的一局时显示占位，不从 onInit 里跳页 -->
+    <div class="empty" if="{{noData}}">
+      <text class="empty-t">没有进行中的人生</text>
+      <text class="empty-s">回首页重新开始一局</text>
+      <div class="btn btn-primary" @click="goHome">
+        <text class="t-btn">回首页</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { ensureContent } from '../../common/core/content-setup.js'
+  import { step, pathText, pathLine, ATTRS, lifespan, talentById, itemById, effText } from '../../common/core/engine.js'
+  import { eventTone, splitChanges, dotsAt, attrUI, pathStyle } from '../../common/core/theme.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go } from '../../common/core/nav.js'
+
+  // 屏幕就这么大，日志只画最近这些条（引擎里日志本身封顶 300 条）。
+  // 14 条 × 2 个 text + 顶部与事件卡 ≈ 54 个文本节点，压在"单页 ≤60"以内
+  // （node tools/count-nodes.mjs 会核对）。
+  const MAX_LOG = 14
+  const REALM_BAR_W = 118
+
+  /** 本页高度总账（纯函数）：顶栏/境界/属性/词条入口固定，事件与历程滚动，按钮固定 */
+  const LAY = layoutOf('Life')
+
+  export default {
+    data: {
+      age: 0,
+      attrText: '',
+      realmText: '',
+      resText: '',
+      realmW: 0,
+      pathCls: 'p-cultivate',
+      hasPath: false,
+      dualText: '',
+      lifeText: '',
+      cur: { age: 0, title: '出生', text: '你睁开了眼睛。', toneCls: 'k-life', toneName: '机遇', changes: [] },
+      logs: [],
+      noLog: true,
+      auto: false,
+      dot: 0,
+      dots: '·',
+      done: false,
+      timer: null,
+      timer2: null,
+      dotTimer: null,
+      info: false,
+      talentLines: [],
+      itemLines: [],
+      noData: false,
+      press: '',
+      // 高度全部来自 common/core/layout.js（432×514 总账），不手写
+      zoneH: LAY.blocks.zone,
+      btnH: LAY.blocks.btn
+    },
+
+    onInit() {
+      app.attach(this)
+      ensureContent()
+      // 不跳页：没有这一局就显示占位（旧写法在这里 replace 回首页，
+      // 撞上"页面正在创建"会让页面一直不可见并退出应用——模拟器实测）
+      if (!app.run) { this.noData = true; return }
+      this.sync()
+    },
+
+    // 从图鉴回来时同步一次；死亡后没跳走（例如跳转前被切到后台）的，回到前台补跳
+    onShow() {
+      app.attach(this)
+      if (!app.run) { this.noData = true; return }
+      this.noData = false
+      this.sync()
+      if (app.run && !app.run.alive && !this.done) this.finish()
+    },
+
+    onHide() {
+      this.stopAuto()
+      this.stopDots()
+      if (this.timer2) { clearTimeout(this.timer2); this.timer2 = null }
+    },
+
+    onDestroy() {
+      this.stopAuto()
+      this.stopDots()
+      if (this.timer2) { clearTimeout(this.timer2); this.timer2 = null }
+    },
+
+    /** 按压态 */
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    sync() {
+      const run = app.run
+      if (!run) return
+      this.age = run.age
+      const parts = []
+      for (let i = 0; i < ATTRS.length; i++) {
+        const ui = attrUI(ATTRS[i])
+        parts.push(ui.short + run.attrs[ATTRS[i]])
+      }
+      this.attrText = parts.join('  ')
+      this.lifeText = '寿元 ' + Math.round(lifespan(run))
+
+      // 顶部境界条：只读的 pathLine()，不打乱任何随机数
+      const pl = pathLine(run)
+      this.hasPath = !!pl
+      if (pl) {
+        const ps = pathStyle(pl.kind)
+        this.pathCls = ps.cls
+        this.realmText = ps.name + '·' + pl.realm
+        this.resText = pl.resName + ' ' + pl.progress + (pl.need ? '/' + pl.need : ' 圆满')
+        this.realmW = Math.round(REALM_BAR_W * Math.min(100, Math.max(0, pl.pct)) / 100)
+        this.dualText = pl.dual ? ('双修 ｜ ' + pl.dual) : ('本命 ' + pl.spName + ' ' + pl.sp)
+      } else {
+        this.dualText = pathText(run)
+      }
+
+      const last = run.log.length ? run.log[run.log.length - 1] : null
+      if (last) {
+        const tone = eventTone(last.kind)
+        this.cur = {
+          age: last.age,
+          title: last.title,
+          text: last.text,
+          toneCls: tone.cls,
+          toneName: tone.name,
+          changes: splitChanges(last.changes)
+        }
+      }
+
+      // 历程：新的在最上面，跳过"当前这一年"（它就在上面的卡片里）
+      const logs = []
+      for (let i = run.log.length - 2; i >= 0 && logs.length < MAX_LOG; i--) {
+        const l = run.log[i]
+        logs.push({
+          id: 'L' + (l.seq !== undefined ? l.seq : i),
+          age: l.age,
+          line: l.title + '：' + l.text,
+          cls: eventTone(l.kind).cls
+        })
+      }
+      this.logs = logs
+      this.noLog = logs.length === 0
+    },
+
+    next() {
+      const run = app.run
+      if (!run || !run.alive) { this.finish(); return }
+      step(run)
+      app.saveRun()
+      this.sync()
+      if (!run.alive) {
+        this.stopAuto()
+        // 死透了：隔半拍再跳结算页（同一帧里跳页 + 重画容易卡）
+        this.timer2 = setTimeout(() => { this.timer2 = null; this.finish() }, 600)
+      }
+    },
+
+    toggleAuto() {
+      app.tap()
+      if (this.auto) { this.stopAuto(); this.stopDots(); return }
+      this.auto = true
+      const ms = app.speedFast ? 200 : 420
+      this.timer = setInterval(() => { this.next() }, ms)
+      // 三点指示：只靠 if 切换 0/1/2，不用动画 API；定时器在 onHide/onDestroy 清掉
+      this.dotTimer = setInterval(() => {
+        this.dot = (this.dot + 1) % 3
+        this.dots = dotsAt(this.dot)
+      }, 320)
+    },
+
+    stopAuto() {
+      this.auto = false
+      if (this.timer) { clearInterval(this.timer); this.timer = null }
+    },
+
+    stopDots() {
+      if (this.dotTimer) { clearInterval(this.dotTimer); this.dotTimer = null }
+    },
+
+    /** 只允许跳一次：死亡后的延时跳转可能撞上用户手动点"结束" */
+    finish() {
+      if (this.done) return
+      this.stopAuto()
+      this.stopDots()
+      if (this.timer2) { clearTimeout(this.timer2); this.timer2 = null }
+      // 跳转被闸门丢掉（距离上一次跳转太近）时不置 done，下一次点击/回到前台还能再跳
+      if (go('pages/End', true)) this.done = true
+    },
+
+    goHome() {
+      app.tap()
+      this.stopAuto()
+      this.stopDots()
+      go('pages/Home', true)
+    },
+
+    showInfo() {
+      const run = app.run
+      if (!run) return
+      app.tap()
+      const tl = run.talents.map(id => {
+        const t = talentById(id)
+        if (!t) return id
+        const eff = effText(t.eff)
+        return t.name + (eff ? '（' + eff + '）' : '') + '：' + (t.desc || '')
+      })
+      const il = run.items.map(id => {
+        const it = itemById(id)
+        if (!it) return id
+        const eff = effText(it.eff)
+        return it.kind + '·' + it.name + (eff ? '（' + eff + '）' : '') + '：' + (it.desc || '')
+      })
+      this.talentLines = tl.length ? tl : ['（没有词条）']
+      this.itemLines = il.length ? il : ['（空手）']
+      this.info = true
+    },
+
+    hideInfo() {
+      this.info = false
+    }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* 境界 / 修为 / 寿元 */
+  .realmline {
+    width: 100%;
+    height: 34px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .realm { font-size: 21px; width: 150px; }
+  .resv { font-size: 18px; color: #9aa0a8; }
+
+  .rbar {
+    width: 118px;
+    height: 10px;
+    border-radius: 5px;
+    background-color: #2b2f36;
+    flex-direction: row;
+    flex-shrink: 0;
+  }
+
+  .rfill { height: 10px; border-radius: 5px; flex-shrink: 0; }
+
+  /* 四条体系配色（与 theme.js 的 PATH_STYLE 对应） */
+  .p-cultivate { color: #bb86fc; }
+  .p-body { color: #ff8a65; }
+  .p-magic { color: #7fb3ff; }
+  .p-tech { color: #6fcf97; }
+  .p-none { color: #8b8f96; }
+  .p-cultivate-fill { background-color: #bb86fc; }
+  .p-body-fill { background-color: #ff8a65; }
+  .p-magic-fill { background-color: #7fb3ff; }
+  .p-tech-fill { background-color: #6fcf97; }
+  .p-none-fill { background-color: #8b8f96; }
+
+  .pathline {
+    width: 100%;
+    height: 32px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  /* 固定区/滚动区/底部按钮的间距与 layout.js 的 gap 对齐 */
+  .status { margin-top: 2px; }
+  .next { margin-top: 6px; }
+
+  .path-t { font-size: 20px; color: #8b8f96; }
+  .path-h { font-size: 20px; color: #c9a86a; }
+
+  /* ---------- 当前事件卡 ---------- */
+  .now {
+    width: 100%;
+    min-height: 96px;
+    flex-direction: column;
+    padding: 10px 14px 10px 14px;
+    border-radius: 16px;
+    background-color: #1b1e24;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+  }
+
+  .now-head {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  /* 年代标记胶囊：字号 18 + 上下 padding 1，高约 20 → 半径取直径一半 10px（不用 50%） */
+  .now-badge {
+    font-size: 18px;
+    color: #0d0f12;
+    background-color: #c9a86a;
+    border-radius: 10px;
+    padding: 1px 8px 1px 8px;
+  }
+
+  .now-kind { font-size: 18px; margin-left: 8px; }
+  .now-title { font-size: 24px; margin-left: 8px; flex: 1; }
+
+  /* 事件类型配色：机遇绿 / 危机橙红 / 奇遇蓝 / 体系紫 / 劫难金 */
+  .k-life { color: #6fcf97; }
+  .k-danger { color: #ff8a65; }
+  .k-fate { color: #7fb3ff; }
+  .k-path { color: #bb86fc; }
+  .k-trial { color: #ffc857; }
+
+  .now-text { font-size: 22px; color: #f0e6d2; margin-top: 6px; }
+
+  .chg-row { flex-direction: row; flex-shrink: 0; margin-top: 2px; }
+  .chg { font-size: 19px; margin-right: 12px; }
+  .d-up { color: #6fcf97; }
+  .d-down { color: #ff8a65; }
+  .d-flat { color: #c9a86a; }
+
+  /* ---------- 历程 ---------- */
+  .log-row {
+    width: 100%;
+    flex-direction: row;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    flex-shrink: 0;
+  }
+
+  .log-age { font-size: 19px; width: 54px; }
+  .log-text { font-size: 19px; color: #b9bec6; flex: 1; }
+  .log-end { font-size: 20px; color: #565b63; margin-top: 6px; }
+
+  .pressed { background-color: #7a6438; }
+  /* 自动播放时的"呼吸"：靠 dot 状态切 class（if 切换，不用动画 API） */
+  .btn-flash { background-color: #2e5d34; }
+
+  .empty {
+    width: 100%;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .empty-t { font-size: 28px; color: #f0e6d2; text-align: center; width: 100%; }
+  .empty-s { font-size: 20px; color: #8b8f96; text-align: center; width: 100%; margin-top: 8px; margin-bottom: 22px; }
+</style>

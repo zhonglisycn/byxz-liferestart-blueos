@@ -1,0 +1,343 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="goHome">首页</text>
+      <text class="t-title">抽词条</text>
+      <text class="t-nav-r" @click="goCodex">图鉴</text>
+    </div>
+
+    <!-- 第一段固定：信息行（已选 x/3、换一批次数、总条数） -->
+    <div class="info" style="height: {{infoH}}px">
+      <text class="t-body">已选 {{picked.length}} / 3</text>
+      <text class="t-dim">换一批 {{rerolls}} 次 · 共 {{total}} 条</text>
+    </div>
+
+    <!-- 第二段固定：已选摘要（一行，超长截断；不再在底部占一块） -->
+    <div class="summary" style="height: {{summaryH}}px">
+      <text class="sum-t">{{pickedLine}}</text>
+    </div>
+
+    <!-- 第三段：唯一可滚动区。10 张卡两列五行，卡片高度按"一屏看全 4 行"设计 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px">
+      <div class="desc" if="{{descText}}">
+        <text class="desc-t">{{descText}}</text>
+      </div>
+      <div class="grid">
+        <div class="grid-row" for="{{rows}}">
+          <div class="tcard {{$item.a.cls}}" style="height: {{cardH}}px" @click="toggle($item.a.id)">
+            <div class="tc-l">
+              <text class="tcard-name {{$item.a.nameCls}}">{{$item.a.name}}</text>
+              <text class="tcard-eff">{{$item.a.eff}}</text>
+            </div>
+            <text class="tcard-tag {{$item.a.tagCls}}">{{$item.a.tagText}}</text>
+          </div>
+          <div class="tcard {{$item.b.cls}}" style="height: {{cardH}}px" @click="toggle($item.b.id)">
+            <div class="tc-l">
+              <text class="tcard-name {{$item.b.nameCls}}">{{$item.b.name}}</text>
+              <text class="tcard-eff">{{$item.b.eff}}</text>
+            </div>
+            <text class="tcard-tag {{$item.b.tagCls}}">{{$item.b.tagText}}</text>
+          </div>
+        </div>
+      </div>
+    </scroll>
+
+    <!-- 第四段固定：底部操作行（在 scroll 之外，任何情况下都可见可点） -->
+    <div class="btn-row ctrl" style="height: {{btnH}}px">
+      <div class="btn btn-quiet btn-fix {{press === 'roll' ? 'pressed' : ''}}"
+           @touchstart="down('roll')" @touchend="up" @touchcancel="up" @click="redraw">
+        <text class="t-btn">换一批</text>
+      </div>
+      <div class="h-gap"></div>
+      <div class="btn grow {{picked.length === 3 ? 'btn-primary' : 'btn-off'}} {{press === 'next' ? 'pressed' : ''}}"
+           @touchstart="down('next')" @touchend="up" @touchcancel="up" @click="next">
+        <text class="{{picked.length === 3 ? 't-btn' : 't-btn-off'}}">{{nextText}}</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { ensureContent } from '../../common/core/content-setup.js'
+  import { newRun, drawTalents, chooseTalents, counts, talentById, effText } from '../../common/core/engine.js'
+  import { rarityCls, rarityName, pathName } from '../../common/core/theme.js'
+  import { clipText } from '../../common/core/views.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go } from '../../common/core/nav.js'
+
+  /** 本页高度总账（纯函数，页面只取数字）：固定三段 + 中间滚动区 */
+  const LAY = layoutOf('Talents')
+
+  /** 稀有度标记（一个字，卡片右上角放得下） */
+  const RARITY_MARK = { 1: '凡', 2: '灵', 3: '仙', 4: '神', 5: '传' }
+
+  /** 已选摘要一行最多几个字（19px 字号，404px 宽度放得下 21 个） */
+  const SUMMARY_MAX = 21
+
+  /** 点词条的说明最多几个字（滚动区里两行，18px 字号） */
+  const DESC_MAX = 40
+
+  /** 词条若是"体系门票"，在卡片上标出体系名（配色交给 rarityCls，卡片本身按稀有度上色） */
+  function pathTagOf(t) {
+    const e = t.eff || {}
+    if (e.spiritRoot || e.enterPath === 'cultivate') return pathName('cultivate')
+    if (e.enterPath) return pathName(e.enterPath)
+    if (e.dualPath) return '双修'
+    return ''
+  }
+
+  export default {
+    data: {
+      rows: [],
+      picked: [],
+      pickedLine: '已选：无 · 点卡片选择',
+      descText: '',
+      nextText: '再选 3 个',
+      total: 0,
+      rerolls: 0,
+      press: '',
+      // 高度全部来自 common/core/layout.js（432×514 总账），不手写
+      infoH: LAY.blocks.info,
+      summaryH: LAY.blocks.summary,
+      zoneH: LAY.blocks.zone,
+      cardH: LAY.rows.h,
+      btnH: LAY.blocks.btns
+    },
+
+    onInit() {
+      app.attach(this)
+      ensureContent()
+      this.total = counts().talents
+      this.roll()
+    },
+
+    // 从图鉴等页面返回：把共享状态重新接一下（run 是共享引用，抽好的候选不会丢）
+    onShow() {
+      app.attach(this)
+    },
+
+    /** 抽一批候选：开局就建好这一局的 run（换一批会重开） */
+    roll() {
+      const run = newRun()
+      app.setRun(run)
+      this.picked = []
+      const cands = drawTalents(run, Math.min(10, this.total))
+      const cards = cands.map(t => {
+        const sys = pathTagOf(t)
+        const mark = RARITY_MARK[t.rarity] || '凡'
+        return {
+          id: t.id,
+          name: t.name,
+          eff: this.shortEff(t),
+          nameCls: rarityCls(t.rarity),
+          tagText: (sys ? sys + '·' : '') + mark,
+          tagCls: rarityCls(t.rarity),
+          cls: 'tcard'
+        }
+      })
+      // 两列五行：蓝河不支持 flex-wrap，行在 JS 里拼好，模板里一行两张卡
+      const rows = []
+      for (let i = 0; i < cards.length; i += 2) {
+        rows.push({ a: cards[i], b: cards[i + 1] || { id: '', name: '', eff: '', cls: 'tcard tcard-empty', tagText: '', tagCls: '', nameCls: '' } })
+      }
+      this.rows = rows
+      this.descText = ''
+      this.nextText = '再选 3 个'
+      this.syncPickedLine()
+    },
+
+    /** 卡片上的一句话效果：把 effText 压到一行（过长就截断，详情在下方看全） */
+    shortEff(t) {
+      const s = effText(t.eff)
+      if (!s) return t.desc || ''
+      const one = s.replace(/ · /g, '/')
+      return one.length > 16 ? one.slice(0, 15) + '…' : one
+    },
+
+    /** 已选摘要（一行，超长截断）：刷新后重建，模板只认整体替换的数据 */
+    syncPickedLine() {
+      const names = []
+      for (let i = 0; i < this.picked.length; i++) names.push(this.nameOf(this.picked[i]))
+      const text = names.length ? ('已选：' + names.join(' · ')) : '已选：无 · 点卡片选择'
+      this.pickedLine = clipText(text, SUMMARY_MAX)
+    },
+
+    /** 按压态：touch 事件切 class，不用动画 API */
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    toggle(id) {
+      if (!id) return
+      app.tap()
+      const i = this.picked.indexOf(id)
+      if (i >= 0) {
+        this.picked.splice(i, 1)
+        this.descText = clipText('已取消「' + this.nameOf(id) + '」', DESC_MAX)
+      } else {
+        if (this.picked.length >= 3) {
+          this.descText = '最多带 3 个，先取消一个'
+          return
+        }
+        this.picked.push(id)
+        const t = talentById(id)
+        if (t) {
+          const eff = effText(t.eff)
+          this.descText = clipText(t.name + '（' + rarityName(t.rarity) + '）' + (eff ? ' ' + eff : '') + '　' + (t.desc || ''), DESC_MAX)
+        }
+      }
+      this.nextText = this.picked.length === 3 ? '下一步' : ('再选 ' + (3 - this.picked.length) + ' 个')
+      this.syncPickedLine()
+      this.refresh()
+    },
+
+    nameOf(id) {
+      const t = talentById(id)
+      return t ? t.name : id
+    },
+
+    /** 选中态重画：模板只认整体替换的数据 */
+    refresh() {
+      const picked = this.picked
+      const rows = []
+      for (let r = 0; r < this.rows.length; r++) {
+        const row = this.rows[r]
+        rows.push({ a: this.mark(row.a, picked), b: this.mark(row.b, picked) })
+      }
+      this.rows = rows
+    },
+
+    mark(c, picked) {
+      if (!c.id) return c
+      const on = picked.indexOf(c.id) >= 0
+      return {
+        id: c.id,
+        name: c.name,
+        eff: c.eff,
+        nameCls: c.nameCls,
+        tagText: on ? '✓ 已选' : c.tagText,
+        tagCls: on ? 'tc-on' : c.tagCls,
+        cls: on ? 'tcard tcard-on' : 'tcard'
+      }
+    },
+
+    redraw() {
+      app.tap()
+      this.rerolls++
+      this.roll()
+    },
+
+    next() {
+      if (this.picked.length !== 3) return
+      app.tap()
+      chooseTalents(app.run, this.picked)
+      app.saveRun()
+      // replace：抽完这一步不该再回来；页面栈里只留一页，省内存
+      // 重复点击由 nav.js 的单次闸门丢掉（连着 replace 同一页会让页面一直不可见）
+      go('pages/Alloc', true)
+    },
+
+    goHome() {
+      app.tap()
+      go('pages/Home', true)
+    },
+
+    goCodex() {
+      app.tap()
+      go('pages/Codex', false)
+    }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* 固定三段（高度从 common/core/layout.js 取，样式只留行内对齐方式） */
+  .info {
+    width: 100%;
+    height: 30px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+
+  .summary {
+    width: 100%;
+    height: 28px;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+
+  .sum-t { font-size: 19px; color: #c9a86a; }
+
+  /* 唯一可滚动区：flex:1 兜底（行内 height 是 layout() 算出来的精确值，两者一致） */
+  .zone { margin-top: 4px; }
+
+  /* 点词条的说明：滚动区顶部两行，不占底部高度 */
+  .desc {
+    width: 100%;
+    height: 52px;
+    border-radius: 16px;
+    background-color: #14161a;
+    padding: 6px 14px 6px 14px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .desc-t { font-size: 18px; color: #b9bec6; }
+
+  .grid {
+    width: 100%;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .grid-row {
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+  }
+
+  /* 两张 193px 卡 + 2px 选中描边（415 以内都塞得下 404 可用宽度） */
+  .tcard {
+    width: 193px;
+    height: 62px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 10px;
+    padding-right: 8px;
+    border-radius: 14px;
+    background-color: #1b1e24;
+    flex-shrink: 0;
+  }
+
+  /* 选中：绿底 + 绿色描边 + 右上角 ✓已选 */
+  .tcard-on { background-color: #24402a; border: 2px solid #6fcf97; }
+  .tcard-empty { background-color: #14161a; }
+
+  .tc-l { flex-direction: column; flex-shrink: 0; }
+  .tcard-name { font-size: 21px; }
+  .tcard-eff { font-size: 15px; color: #7d838c; margin-top: 1px; }
+  .tcard-tag { font-size: 16px; }
+  .tc-on { color: #6fcf97; }
+
+  /* 稀有度配色：凡灰 / 灵蓝 / 仙紫 / 神金 */
+  .r1 { color: #c8cdd4; }
+  .r2 { color: #7fb3ff; }
+  .r3 { color: #bb86fc; }
+  .r4 { color: #ffc857; }
+  .r5 { color: #ffc857; }
+
+  /* 底部操作行：与滚动区之间的间距在 ctrl 上（高度由 layout() 给） */
+  .ctrl { margin-top: 6px; }
+  .btn-fix { width: 140px; }
+  .pressed { background-color: #7a6438; }
+</style>

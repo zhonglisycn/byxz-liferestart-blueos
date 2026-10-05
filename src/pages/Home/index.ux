@@ -1,0 +1,181 @@
+<template>
+  <div class="page">
+    <div class="hero" style="height: {{heroH}}px">
+      <text class="t-hero">人生重开 · 修仙</text>
+      <text class="t-hero-sub">四条体系 · {{total}} 条原创内容</text>
+    </div>
+
+    <div class="mid">
+      <!-- 主按钮：有档=继续人生，无档=重开人生（选中空槽也是重开） -->
+      <div class="btn-hero {{canResume ? 'hero-on' : 'hero-off'}} {{press === 'start' ? 'pressed' : ''}}"
+           @touchstart="down('start')" @touchend="up" @touchcancel="up" @click="start">
+        <text class="t-hero-btn">{{startText}}</text>
+      </div>
+      <text class="start-sub">{{startSub}}</text>
+
+      <!-- 两个入口：收集度/最近结局/存档槽都在「档案」里；设置与关于在「设置」里 -->
+      <div class="btn-row">
+        <div class="btn grow btn-quiet {{press === 'arch' ? 'pressed' : ''}}"
+             @touchstart="down('arch')" @touchend="up" @touchcancel="up" @click="goArchive">
+          <text class="t-btn-sm">档案</text>
+        </div>
+        <div class="h-gap"></div>
+        <div class="btn grow btn-quiet {{press === 'set' ? 'pressed' : ''}}"
+             @touchstart="down('set')" @touchend="up" @touchcancel="up" @click="goAbout">
+          <text class="t-btn-sm">设置</text>
+        </div>
+      </div>
+      <text class="entry-hint">档案 = 收集度 · 最近结局 · 三个存档槽</text>
+    </div>
+
+    <div class="foot" style="height: {{footH}}px">
+      <text class="t-dim">原作与移植：模糊二维码byxz · MIT</text>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { STATS } from '../../common/core/stats.js'
+  import { homeView } from '../../common/core/views.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go } from '../../common/core/nav.js'
+
+  /** 本页高度总账（纯函数）：无滚动区，标题/中段/署名都装得下 */
+  const LAY = layoutOf('Home')
+
+  export default {
+    data: {
+      total: 0,
+      canResume: false,
+      startText: '重开人生',
+      startSub: '抽词条 → 分配属性 → 逐年推进',
+      press: '',
+      timer: null,
+      // 高度来自 common/core/layout.js（432×514 总账），不手写
+      heroH: LAY.blocks.hero,
+      footH: LAY.blocks.foot
+    },
+
+    onInit() {
+      app.attach(this)
+      this.sync()
+    },
+
+    // 从档案/设置/人生页返回时刷新：槽位与存档可能刚变过
+    onShow() {
+      app.attach(this)
+      this.sync()
+      // 冷启动时存档还在异步读：读完补刷一次（定时器在 onHide/onDestroy 清掉）
+      if (!app.loaded) {
+        const self = this
+        this.clearTimer()
+        this.timer = setTimeout(function () { self.timer = null; self.sync() }, 260)
+      }
+    },
+
+    onHide() { this.clearTimer() },
+
+    onDestroy() { this.clearTimer() },
+
+    clearTimer() {
+      if (this.timer) { clearTimeout(this.timer); this.timer = null }
+    },
+
+    sync() {
+      const s = STATS
+      this.total = s.talents + s.events + s.items + s.endings + s.achievements + s.paths
+      // 主按钮与副标题只由"当前选中的槽"决定（拼装逻辑在 views.js，有单测）
+      const v = homeView({ slots: app.slots, slot: app.slot })
+      this.canResume = v.canResume
+      this.startText = v.startText
+      this.startSub = v.startSub
+    },
+
+    /* ---------------- 按压态（touch 事件 + if 切 class，不用动画 API） ---------------- */
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    start() {
+      app.tap()
+      if (this.canResume && app.run) go('pages/Life', true)
+      else go('pages/Talents', true)
+    },
+
+    goArchive() {
+      app.tap()
+      go('pages/Archive', false)
+    },
+
+    goAbout() {
+      app.tap()
+      go('pages/About', false)
+    }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  .hero {
+    width: 100%;
+    height: 62px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .t-hero { font-size: 34px; color: #f0e6d2; font-weight: bold; text-align: center; }
+  .t-hero-sub { font-size: 19px; color: #8b8f96; margin-top: 3px; text-align: center; }
+
+  .mid {
+    width: 100%;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  /* ---------- 主按钮 ---------- */
+  .btn-hero {
+    width: 100%;
+    height: 76px;
+    border-radius: 38px;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .hero-on { background-color: #4caf50; }
+  .hero-off { background-color: #4a4f57; }
+  .t-hero-btn { font-size: 31px; color: #ffffff; font-weight: bold; text-align: center; width: 100%; }
+
+  .start-sub {
+    width: 100%;
+    font-size: 18px;
+    color: #8b8f96;
+    text-align: center;
+    margin-top: 6px;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+  }
+
+  .pressed { background-color: #7a6438; }
+
+  .entry-hint {
+    width: 100%;
+    font-size: 16px;
+    color: #6b7078;
+    text-align: center;
+    margin-top: 8px;
+    flex-shrink: 0;
+  }
+
+  .foot {
+    width: 100%;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+</style>

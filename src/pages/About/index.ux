@@ -1,0 +1,143 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="back">返回</text>
+      <text class="t-title">关于与设置</text>
+      <text class="t-nav-r" @click="goCodex">图鉴</text>
+    </div>
+
+    <div class="rows">
+      <div class="srow" @click="toggleSpeed">
+        <text class="srow-k">自动播放速度</text>
+        <text class="srow-v">{{speedName}}</text>
+      </div>
+      <div class="srow" @click="toggleVib">
+        <text class="srow-k">按键震动</text>
+        <text class="srow-v">{{vibName}}</text>
+      </div>
+    </div>
+
+    <!-- 两个开关行固定在上方；玩法/署名长文案滚动 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px">
+      <text class="sec">玩法</text>
+      <text class="line">1. 开局抽 10 个天赋词条，选 3 个带走</text>
+      <text class="line">2. 把 20 点分配到智力 / 情商 / 体质 / 幸运</text>
+      <text class="line">3. 逐年推进人生，属性决定你会遇到什么事</text>
+      <text class="line">4. 有天赋者会踏入四条体系之一：修仙 / 炼体 / 魔法 / 科技</text>
+      <text class="line">5. 积累圆满会自动尝试突破，失败会受伤并掉本命属性</text>
+      <text class="line">6. 死亡后按结局与成就评分，见过的词条记进图鉴</text>
+      <text class="line">7. 一生只有一次"大难不死"，且与幸运有关</text>
+
+      <text class="sec">内容规模</text>
+      <text class="line">词条 {{cTalents}} · 事件 {{cEvents}} · 物品 {{cItems}}</text>
+      <text class="line">结局 {{cEndings}} · 成就 {{cAchievements}} · 体系 {{cPaths}}</text>
+
+      <text class="sec">存档</text>
+      <text class="line">三个槽位：自动档 + 存档一 + 存档二，都在首页「档案」页里：点卡片选中，按「读取」继续，连按两次「删除」才会清空。当前选中的槽每推进一年都会自动写入手表存储，退出再进来可以从首页「继续人生」接着玩。</text>
+      <text class="line">手动槽只在被选中、且真正开始一局时才写入，适合把长局留在自动档之外；死亡结算后该槽自动清掉。</text>
+      <text class="line">词条图鉴的收集进度单独保存，可在图鉴页两段式清空；收集度与最近一次结局都收在「档案」页。</text>
+
+      <text class="sec">来源与署名</text>
+      <text class="line">人生重开 · 修仙 v{{version}}（vivo 手表移植版）</text>
+      <text class="line">原作：小米手环快应用版 v{{srcVersion}}，作者 模糊二维码byxz</text>
+      <text class="line">移植：C++/JS 内核原样搬运，界面按 432×514 方屏重排</text>
+      <text class="line">原作与移植均为 MIT 许可 · 作者 模糊二维码byxz</text>
+      <text class="line">包名 com.byxz.liferestart.gt2</text>
+    </scroll>
+  </div>
+</template>
+
+<script>
+  import app, { VERSION, SRC_VERSION } from '../../common/core/app.js'
+  import { STATS } from '../../common/core/stats.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go, back as navBack } from '../../common/core/nav.js'
+
+  /** 本页高度总账（纯函数）：两个开关行固定，长文案滚动 */
+  const LAY = layoutOf('About')
+
+  export default {
+    data: {
+      version: VERSION,
+      srcVersion: SRC_VERSION,
+      speedName: '正常',
+      vibName: '开',
+      cTalents: 0,
+      cEvents: 0,
+      cItems: 0,
+      cEndings: 0,
+      cAchievements: 0,
+      cPaths: 0,
+      // 高度来自 common/core/layout.js（432×514 总账），不手写
+      zoneH: LAY.blocks.zone
+    },
+
+    onInit() {
+      app.attach(this)
+      this.sync()
+    },
+
+    onShow() {
+      app.attach(this)
+      this.sync()
+    },
+
+    sync() {
+      this.speedName = app.speedFast ? '快速' : '正常'
+      this.vibName = app.vib ? '开' : '关'
+      this.cTalents = STATS.talents
+      this.cEvents = STATS.events
+      this.cItems = STATS.items
+      this.cEndings = STATS.endings
+      this.cAchievements = STATS.achievements
+      this.cPaths = STATS.paths
+    },
+
+    toggleSpeed() {
+      app.tap()
+      app.setSpeedFast(!app.speedFast)
+      this.sync()
+    },
+
+    toggleVib() {
+      app.setVib(!app.vib)
+      app.tap()
+      this.sync()
+    },
+
+    goCodex() {
+      app.tap()
+      go('pages/Codex', false)
+    },
+
+    back() { navBack() }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  .rows {
+    width: 100%;
+    flex-direction: column;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .srow {
+    width: 100%;
+    height: 54px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 18px;
+    padding-right: 18px;
+    margin-bottom: 8px;
+    border-radius: 14px;
+    background-color: #1b1e24;
+    flex-shrink: 0;
+  }
+
+  .srow-k { font-size: 24px; color: #f0e6d2; }
+  .srow-v { font-size: 24px; color: #c9a86a; }
+</style>

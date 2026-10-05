@@ -1,0 +1,442 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="back">返回</text>
+      <text class="t-title">词条图鉴</text>
+      <text class="t-nav-r" @click="clearSeen">{{confirmClear ? '确认清空' : '清空'}}</text>
+    </div>
+
+    <div class="tabs">
+      <div class="tab {{tab === $item.k ? 'tab-on' : ''}}" for="{{tabs}}" @click="setTab($item.k)">
+        <text class="tab-t {{tab === $item.k ? 'tab-t-on' : ''}}">{{$item.name}}</text>
+      </div>
+    </div>
+
+    <div class="filters" if="{{showFilter}}">
+      <div class="filter {{flt === $item.k ? 'filter-on' : ''}}" for="{{filters}}" @click="setFilter($item.k)">
+        <text class="filter-t">{{$item.name}}</text>
+      </div>
+    </div>
+
+    <!-- 分类完成度：已得 / 总数 + 百分比条 -->
+    <div class="compl">
+      <div class="compl-row">
+        <text class="compl-t">{{hint}}</text>
+        <text class="compl-p {{complCls}}">{{complPct}}%</text>
+      </div>
+      <div class="cbar">
+        <div class="cfill {{complFill}}" style="width: {{complW}}px"></div>
+      </div>
+    </div>
+
+    <!-- 中段唯一可滚动区：条目列表；底部翻页行在 scroll 之外 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px">
+      <div class="crow" for="{{pageList}}">
+        <text class="crow-name {{$item.cls}}">{{$item.show}}</text>
+        <text class="crow-desc">{{$item.desc}}</text>
+        <text class="crow-note" if="{{$item.note}}">{{$item.note}}</text>
+      </div>
+    </scroll>
+
+    <div class="pager" if="{{showPager}}">
+      <div class="pg-btn {{press === 'prev' ? 'pressed' : ''}}"
+           @touchstart="down('prev')" @touchend="up" @touchcancel="up" @click="prevPage">
+        <text class="pg-t">上一页</text>
+      </div>
+      <text class="pg-n">{{pageText}}</text>
+      <div class="pg-btn {{press === 'next' ? 'pressed' : ''}}"
+           @touchstart="down('next')" @touchend="up" @touchcancel="up" @click="nextPage">
+        <text class="pg-t">下一页</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { STATS } from '../../common/core/stats.js'
+  import { CODEX_ROWS, CODEX_SEP } from '../../common/core/codex-index.js'
+  import { percent, barWidth } from '../../common/core/theme.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { toast } from '../../common/core/toast.js'
+  import { back as navBack } from '../../common/core/nav.js'
+
+  // 每页只渲染 14 条（原 20）：方屏一条最多 3 行文本，20 条就是 60 多个文本节点，
+  // 一屏少 6 条 → 少 ~18 个节点，切分类/翻页都轻一档。
+  const PAGE_SIZE = 14
+  const CBAR_W = 110
+
+  /** 本页高度总账（纯函数）：标签/筛选/完成度固定，条目滚动，翻页行固定在底部 */
+  const LAY = layoutOf('Codex')
+
+  const TABS = [
+    { k: 'P', name: '体系' },
+    { k: 'T', name: '词条' },
+    { k: 'E', name: '事件' },
+    { k: 'I', name: '物品' },
+    { k: 'D', name: '结局' },
+    { k: 'A', name: '成就' }
+  ]
+
+  /** 各分类的总条数（预生成在 stats.js，进页不用遍历内容） */
+  const TOTAL_OF = {
+    T: STATS.talents,
+    E: STATS.events,
+    I: STATS.items,
+    D: STATS.endings,
+    A: STATS.achievements,
+    P: STATS.paths
+  }
+
+  /** 有"未解锁"概念的分类（事件 / 体系恒为已解锁） */
+  const HAS_LOCK = { T: 1, I: 1, D: 1, A: 1 }
+
+  /** 各分类完成度条的配色（沿用主题表里的稀有度色阶） */
+  const FILL_OF = { P: 'cf-p', T: 'cf-t', E: 'cf-e', I: 'cf-i', D: 'cf-d', A: 'cf-a' }
+
+  export default {
+    data: {
+      tab: 'T',
+      tabs: TABS,
+      filters: [
+        { k: 'all', name: '全部' },
+        { k: 'got', name: '已得' },
+        { k: 'lock', name: '未得' }
+      ],
+      flt: 'all',
+      showFilter: true,
+      pageList: [],
+      pg: 0,
+      pageText: '',
+      showPager: false,
+      hint: '',
+      complPct: 0,
+      complW: 0,
+      complCls: '',
+      complFill: 'cf-t',
+      confirmClear: false,
+      press: '',
+      // 高度来自 common/core/layout.js（432×514 总账），不手写
+      zoneH: LAY.blocks.zone
+    },
+
+    onInit() {
+      app.attach(this)
+      this.rebuild()
+    },
+
+    // 从别的页面返回时刷新（图鉴进度可能刚变过）
+    onShow() {
+      app.attach(this)
+      this.rebuild()
+    },
+
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    /**
+     * 已得 id 表：把 codexSeen 里的数组转成对象，筛选 O(1)。
+     * 只做这一遍线性扫描（几百条），不碰内容文本。
+     * 结果挂在普通实例字段上（不进 data）：上千个键的对象塞进响应式数据只会白白多一层转换。
+     */
+    seenIndex() {
+      const c = app.codexSeen || {}
+      const keys = ['T', 'I', 'D', 'A', 'P']
+      const map = {}
+      const count = {}
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i]
+        const a = c[k] || []
+        const m = {}
+        for (let j = 0; j < a.length; j++) m[a[j]] = 1
+        map[k] = m
+        count[k] = a.length
+      }
+      return { map: map, count: count }
+    },
+
+    rebuild() {
+      try {
+        const seen = this.seenIndex()
+        this.seenMap = seen.map
+        const n = seen.count
+        const total = TOTAL_OF[this.tab] || 0
+        let got = n[this.tab] || 0
+        if (this.tab === 'E' || this.tab === 'P') got = total
+        if (this.tab === 'E') {
+          this.showFilter = false
+          this.hint = '事件 ' + total + ' 条（全部可得）'
+        } else if (this.tab === 'P') {
+          this.showFilter = false
+          this.hint = '体系 ' + n.P + ' / ' + total + ' 条走过'
+        } else {
+          this.showFilter = true
+          this.hint = this.tabName() + ' ' + got + ' / ' + total + ' 条'
+        }
+        this.complPct = percent(got, total)
+        this.complW = barWidth(got, total, CBAR_W)
+        this.complCls = this.complPct >= 100 ? 'cp-ok' : (this.complPct > 0 ? 'cp-mid' : 'cp-zero')
+        this.complFill = FILL_OF[this.tab] || 'cf-t'
+        this.poolIdx = this.buildPool()
+        this.showPage()
+      } catch (e) {
+        this.pageList = []
+        this.poolIdx = null
+        this.hint = '图鉴载入出错：' + (e && e.message ? e.message : e)
+      }
+    },
+
+    tabName() {
+      for (let i = 0; i < TABS.length; i++) if (TABS[i].k === this.tab) return TABS[i].name
+      return ''
+    },
+
+    /**
+     * 当前分类的"显示索引"。
+     * 返回 null 表示整类都显示（直接用行号，连数组都不建）；
+     * 只有 已得/未得 筛选才建一个行号数组——判锁只看 id，不拆整行文本。
+     */
+    buildPool() {
+      if (this.flt === 'all' || this.tab === 'E' || this.tab === 'P') return null
+      const rows = CODEX_ROWS[this.tab] || []
+      const seen = this.seenMap[this.tab] || {}
+      const want = this.flt === 'got'
+      const out = []
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]
+        const id = row.slice(0, row.indexOf(CODEX_SEP))
+        if (!!seen[id] === want) out.push(i)
+      }
+      return out
+    },
+
+    /** 只把当前页的十几行拆成显示对象——进页/翻页都不遍历全量 */
+    showPage() {
+      const rows = CODEX_ROWS[this.tab] || []
+      const idx = this.poolIdx
+      const len = idx ? idx.length : rows.length
+      const pages = Math.max(1, Math.ceil(len / PAGE_SIZE))
+      if (this.pg > pages - 1) this.pg = pages - 1
+      if (this.pg < 0) this.pg = 0
+      const from = this.pg * PAGE_SIZE
+      const list = []
+
+      if (this.tab === 'P') {
+        const seen = this.seenMap.P || {}
+        for (let i = 0; i < rows.length && list.length < PAGE_SIZE; i++) {
+          const f = rows[i].split(CODEX_SEP)
+          list.push(seen[f[0]]
+            ? { show: f[1], desc: f[2], note: f[3], cls: 'r4' }
+            : { show: '？？？', desc: '尚未走过这条体系', note: '', cls: 'locked' })
+        }
+      } else {
+        const seen = HAS_LOCK[this.tab] ? (this.seenMap[this.tab] || {}) : null
+        for (let i = from; i < from + PAGE_SIZE && i < len; i++) {
+          const row = rows[idx ? idx[i] : i]
+          if (!row) continue
+          const f = row.split(CODEX_SEP)
+          list.push(!seen || seen[f[0]]
+            ? { show: f[1], desc: f[2], note: f[3], cls: f[4] }
+            : { show: '？？？', desc: '尚未解锁（集齐后显示具体文案）', note: '', cls: 'locked' })
+        }
+      }
+
+      this.pageList = list
+      this.showPager = len > PAGE_SIZE
+      this.pageText = len ? ((this.pg + 1) + ' / ' + pages + ' 页') : '暂无'
+    },
+
+    setTab(k) {
+      app.tap()
+      this.tab = k
+      this.flt = 'all'
+      this.confirmClear = false
+      this.pg = 0
+      this.rebuild()
+    },
+
+    setFilter(k) {
+      app.tap()
+      this.flt = k
+      this.confirmClear = false
+      this.pg = 0
+      this.rebuild()
+    },
+
+    prevPage() {
+      if (this.pg <= 0) return
+      app.tap()
+      this.pg--
+      this.showPage()
+    },
+
+    nextPage() {
+      const rows = CODEX_ROWS[this.tab] || []
+      const len = this.poolIdx ? this.poolIdx.length : rows.length
+      if ((this.pg + 1) * PAGE_SIZE >= len) return
+      app.tap()
+      this.pg++
+      this.showPage()
+    },
+
+    /** 两段式清空：第一次是"清空"，再点一次才真清（方屏上不做弹窗，少一层风险） */
+    clearSeen() {
+      app.tap()
+      if (!this.confirmClear) {
+        this.confirmClear = true
+        // 这行必须是一行（compl 固定 44px）：只提示"再点一次右上角"
+        this.hint = '再点一次右上角「确认清空」'
+        return
+      }
+      this.confirmClear = false
+      app.clearCodex()
+      this.rebuild()
+      toast('图鉴已清空')
+    },
+
+    // 连点两下"返回"由 nav.js 的闸门丢掉第二次（回到根页再 back 会退出应用）
+    back() { navBack() }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* 6 个标签：62×6 = 372px，装得进 404px 可用宽度 */
+  .tabs {
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-between;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .tab {
+    width: 62px;
+    height: 42px;
+    border-radius: 12px;
+    background-color: #1b1e24;
+    border: 2px solid #1b1e24;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 选中态：绿底 + 绿描边 + 亮字 */
+  .tab-on { background-color: #24402a; border: 2px solid #6fcf97; }
+  .tab-t { font-size: 21px; color: #9aa0a8; }
+  .tab-t-on { color: #f0e6d2; font-weight: bold; }
+
+  .filters {
+    width: 100%;
+    flex-direction: row;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+
+  .filter {
+    width: 112px;
+    height: 38px;
+    margin-left: 5px;
+    margin-right: 5px;
+    border-radius: 19px;
+    background-color: #1b1e24;
+    border: 2px solid #1b1e24;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .filter-on { background-color: #3a3222; border: 2px solid #c9a86a; }
+  .filter-t { font-size: 20px; color: #f0e6d2; }
+
+  /* ---------- 分类完成度 ---------- */
+  .compl {
+    width: 100%;
+    height: 44px;
+    flex-direction: column;
+    justify-content: center;
+    flex-shrink: 0;
+    padding-left: 2px;
+    padding-right: 2px;
+  }
+
+  .compl-row {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .compl-t { font-size: 19px; color: #9aa0a8; }
+  .compl-p { font-size: 19px; }
+  .cp-zero { color: #6b7078; }
+  .cp-mid { color: #c9a86a; }
+  .cp-ok { color: #6fcf97; }
+
+  .cbar {
+    width: 110px;
+    height: 8px;
+    border-radius: 4px;
+    background-color: #2b2f36;
+    flex-direction: row;
+    flex-shrink: 0;
+  }
+
+  .cfill { height: 8px; border-radius: 4px; flex-shrink: 0; }
+  .cf-p { background-color: #bb86fc; }
+  .cf-t { background-color: #c9a86a; }
+  .cf-e { background-color: #7fb3ff; }
+  .cf-i { background-color: #6fcf97; }
+  .cf-d { background-color: #ffc857; }
+  .cf-a { background-color: #ff9ecd; }
+
+  .crow {
+    width: 100%;
+    flex-direction: column;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    flex-shrink: 0;
+  }
+
+  .crow-name { font-size: 22px; }
+  .crow-desc { font-size: 20px; color: #9aa0a8; }
+  .crow-note { font-size: 19px; color: #6b7078; }
+
+  /* 稀有度：凡灰 / 灵蓝 / 仙紫 / 神金 */
+  .r1 { color: #c8cdd4; }
+  .r2 { color: #7fb3ff; }
+  .r3 { color: #bb86fc; }
+  .r4 { color: #ffc857; }
+  .r5 { color: #ffc857; }
+  /* 事件类型：机遇绿 / 危机橙红 / 奇遇蓝 / 体系紫 / 劫难金 */
+  .k-life { color: #6fcf97; }
+  .k-danger { color: #ff8a65; }
+  .k-fate { color: #7fb3ff; }
+  .k-path { color: #bb86fc; }
+  .k-trial { color: #ffc857; }
+  /* 未得条目：灰显，具体文案已在数据层清空 */
+  .locked { color: #565b63; }
+
+  .pager {
+    width: 100%;
+    height: 58px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .pg-btn {
+    width: 126px;
+    height: 52px;
+    border-radius: 26px;
+    background-color: #4a4f57;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pressed { background-color: #7a6438; }
+  .pg-t { font-size: 22px; color: #ffffff; }
+  .pg-n { font-size: 20px; color: #8b8f96; }
+</style>

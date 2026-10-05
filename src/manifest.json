@@ -1,0 +1,64 @@
+{
+  "package": "com.byxz.liferestart.gt2",
+  "name": "人生重开",
+  "versionName": "1.2.0",
+  "versionCode": 120,
+  "appCategory": [
+    "games"
+  ],
+  "description": "人生重开·修仙（vivo 手表移植版）：四条修炼体系，抽词条 / 分配属性 / 逐年推进 / 死亡结算 / 词条图鉴；首页改版，收集度与三存档槽收进「档案」页",
+  "icon": "/common/icon/logo.png",
+  "features": [
+    {
+      "name": "blueos.app.appmanager.router"
+    },
+    {
+      "name": "blueos.storage.storage"
+    },
+    {
+      "name": "blueos.window.prompt"
+    },
+    {
+      "name": "blueos.hardware.vibrator.vibrator"
+    }
+  ],
+  "deviceTypeList": [
+    "watch",
+    "watch-square"
+  ],
+  "config": {
+    "designWidth": 432
+  },
+  "router": {
+    "entry": "pages/Home",
+    "pages": {
+      "pages/Home": {
+        "component": "index"
+      },
+      "pages/Talents": {
+        "component": "index"
+      },
+      "pages/Alloc": {
+        "component": "index"
+      },
+      "pages/Life": {
+        "component": "index"
+      },
+      "pages/End": {
+        "component": "index"
+      },
+      "pages/Codex": {
+        "component": "index"
+      },
+      "pages/Archive": {
+        "component": "index"
+      },
+      "pages/About": {
+        "component": "index"
+      }
+    }
+  },
+  "display": {
+    "backgroundColor": "#000000"
+  }
+}

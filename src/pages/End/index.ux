@@ -1,0 +1,309 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="again">再来</text>
+      <text class="t-title">此生结局</text>
+      <text class="t-nav-r" @click="goCodex">图鉴</text>
+    </div>
+
+    <!-- 评级大字 + 结局名 -->
+    <div class="hero" if="{{!noData}}">
+      <text class="grade {{rankCls}}">{{rankLetter}}</text>
+      <div class="hero-txt">
+        <text class="hero-name {{rankCls}}">{{ending.name}}</text>
+        <text class="hero-sub">{{rankName}} · 评分 {{score}}</text>
+      </div>
+    </div>
+    <!-- 本局关键标签：体系 / 最高境界 / 词条数 -->
+    <div class="tags" if="{{!noData}}">
+      <div class="tag" for="{{tags}}">
+        <text class="tag-k">{{$item.k}}</text>
+        <text class="tag-v {{$item.cls}}">{{$item.v}}</text>
+      </div>
+    </div>
+
+    <div class="facts" if="{{!noData}}">
+      <div class="fact-row" for="{{factRows}}">
+        <div class="fact">
+          <text class="fact-k">{{$item.a.k}}</text>
+          <text class="fact-v">{{$item.a.v}}</text>
+        </div>
+        <div class="fact">
+          <text class="fact-k">{{$item.b.k}}</text>
+          <text class="fact-v">{{$item.b.v}}</text>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中段唯一可滚动区：结局说明 + 三份清单；两个按钮在 scroll 之外 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px" if="{{!noData}}">
+      <text class="hero-desc">{{ending.desc}}</text>
+      <text class="sec">天赋词条</text>
+      <div class="line-row" for="{{talents}}">
+        <text class="line">{{$item}}</text>
+      </div>
+      <text class="sec">随身之物</text>
+      <div class="line-row" for="{{items}}">
+        <text class="line">{{$item}}</text>
+      </div>
+      <text class="sec">达成成就</text>
+      <div class="line-row" for="{{achs}}">
+        <text class="line t-ok">{{$item}}</text>
+      </div>
+    </scroll>
+
+    <div class="btn-row end-btns" style="height: {{btnH}}px" if="{{!noData}}">
+      <div class="btn grow btn-primary {{press === 'again' ? 'pressed' : ''}}"
+           @touchstart="down('again')" @touchend="up" @touchcancel="up" @click="again">
+        <text class="t-btn">再来一局</text>
+      </div>
+      <div class="h-gap"></div>
+      <div class="btn grow btn-quiet {{press === 'home' ? 'pressed' : ''}}"
+           @touchstart="down('home')" @touchend="up" @touchcancel="up" @click="goHome">
+        <text class="t-btn">回首页</text>
+      </div>
+    </div>
+
+    <!-- 数据兜底：没有可结算的一局时显示占位（正常流程不会走到，防异常返回） -->
+    <div class="empty" if="{{noData}}">
+      <text class="empty-t">没有可以结算的人生</text>
+      <text class="empty-s">回首页重新开始一局</text>
+      <div class="btn btn-primary" @click="goHome">
+        <text class="t-btn">回首页</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { ensureContent } from '../../common/core/content-setup.js'
+  import { summary, talentById, itemById, codex, RARITY_NAME, PATHS, pathStat } from '../../common/core/engine.js'
+  import { rankStyle, pathStyle } from '../../common/core/theme.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go } from '../../common/core/nav.js'
+
+  /** 本页高度总账（纯函数）：评级/标签/四格数据固定，结局说明与清单滚动，按钮固定 */
+  const LAY = layoutOf('End')
+
+  export default {
+    data: {
+      ending: { name: '', desc: '' },
+      rankCls: 'rk1',
+      rankLetter: 'D',
+      rankName: '平凡',
+      score: 0,
+      tags: [],
+      factRows: [],
+      talents: ['（无）'],
+      items: ['（无）'],
+      achs: ['（无）'],
+      noData: false,
+      press: '',
+      // 高度全部来自 common/core/layout.js（432×514 总账），不手写
+      zoneH: LAY.blocks.zone,
+      btnH: LAY.blocks.btns
+    },
+
+    onInit() {
+      app.attach(this)
+      ensureContent()
+      const run = app.run
+      // 不跳页：没有这一局就显示占位（旧写法在这里 replace 回首页，
+      // 撞上"页面正在创建"会让页面一直不可见并退出应用——模拟器实测）
+      if (!run) { this.noData = true; return }
+      this.noData = false
+      const s = summary(run)
+      this.ending = s.ending
+      const rs = rankStyle(s.rank.rank)
+      this.rankCls = rs.cls
+      this.rankLetter = rs.letter
+      this.rankName = rs.name
+      this.score = s.score
+
+      // 关键标签：体系 / 最高境界 / 词条数 / 物品数
+      const pk = run.path ? run.path.kind : null
+      const ps = pathStyle(pk)
+      this.tags = [
+        { k: '体系', v: run.path ? ps.name : '凡人', cls: pk ? (ps.cls + '-txt') : '' },
+        { k: '境界', v: this.realmOf(run), cls: pk ? (ps.cls + '-txt') : '' },
+        { k: '词条', v: run.talents.length + ' 个', cls: '' },
+        { k: '物品', v: run.items.length + ' 件', cls: '' }
+      ]
+
+      const facts = [
+        { k: '享年', v: s.age + ' 岁' },
+        { k: '死因', v: run.death || '寿终' },
+        { k: '主修', v: run.path ? PATHS[run.path.kind].res : '无' },
+        { k: '双修', v: run.path2 ? pathStyle(run.path2.kind).name : '无' }
+      ]
+      const rows = []
+      for (let i = 0; i < facts.length; i += 2) rows.push({ a: facts[i], b: facts[i + 1] || { k: '', v: '' } })
+      this.factRows = rows
+
+      const tl = run.talents.map(id => { const t = talentById(id); return t ? t.name + '（' + RARITY_NAME[t.rarity] + '）' : id })
+      this.talents = tl.length ? tl : ['（无）']
+      const il = run.items.map(id => { const x = itemById(id); return x ? x.kind + '·' + x.name : id })
+      this.items = il.length ? il : ['（无）']
+
+      const cx = codex()
+      const amap = {}
+      for (let i = 0; i < cx.achievements.length; i++) amap[cx.achievements[i].id] = cx.achievements[i]
+      const al = s.achievements.map(id => {
+        const x = amap[id]
+        return x ? x.name + '：' + x.desc : id
+      })
+      this.achs = al.length ? al : ['（无）']
+
+      // 记进图鉴与"最近结局"，然后把这局从"可续玩"里摘掉（内存里留着给本页显示）
+      app.markCodex(run, s.ending.id, s.achievements)
+      app.setLast({
+        name: s.ending.name,
+        rank: s.rank.rank,
+        score: s.score,
+        age: s.age,
+        path: (run.path ? pathStyle(run.path.kind).name + '·' + this.realmOf(run) : '凡人'),
+        talents: run.talents.length,
+        items: run.items.length
+      })
+      app.clearRun()
+    },
+
+    // 从图鉴返回只重新接一下共享状态（本页数据在 onInit 已经算好，不重算）
+    onShow() {
+      app.attach(this)
+    },
+
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    /** 本局最高境界：按实际走的体系取阶梯名（realmName 只认修仙阶梯） */
+    realmOf(run) {
+      if (!run.path) return '凡体'
+      const st = pathStat(run, run.path.kind)
+      return st ? st.name : '凡体'
+    },
+
+    again() {
+      app.tap()
+      go('pages/Talents', true)
+    },
+
+    goCodex() {
+      app.tap()
+      go('pages/Codex', false)
+    },
+
+    goHome() {
+      app.tap()
+      go('pages/Home', true)
+    }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* 评级大字（70px）固定 84px，给文字留出上下余量；高度与 layout.js 对齐 */
+  .hero {
+    width: 100%;
+    height: 84px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* 评级大字：S 金 / A 紫 / B 蓝 / C 绿 / D 灰 */
+  .grade {
+    font-size: 70px;
+    font-weight: bold;
+    width: 96px;
+    text-align: center;
+  }
+
+  .hero-txt { flex-direction: column; flex: 1; }
+  .hero-name { font-size: 30px; font-weight: bold; }
+  .hero-sub { font-size: 19px; color: #9aa0a8; margin-top: 4px; }
+  /* 结局说明在滚动区顶部（长文案只滚动，不挤底部按钮） */
+  .hero-desc { font-size: 20px; color: #b9bec6; text-align: center; width: 100%; margin-bottom: 6px; }
+
+  /* 滚动区与底部按钮的间距与 layout.js 的 gap 对齐 */
+  .zone { margin-top: 4px; }
+  .end-btns { margin-top: 6px; }
+
+  .rk1 { color: #a8adb5; }
+  .rk2 { color: #6fcf97; }
+  .rk3 { color: #7fb3ff; }
+  .rk4 { color: #bb86fc; }
+  .rk5 { color: #ffc857; }
+
+  /* 关键标签 */
+  .tags {
+    width: 100%;
+    height: 40px;
+    flex-direction: row;
+    justify-content: space-between;
+    flex-shrink: 0;
+    margin-bottom: 6px;
+  }
+
+  .tag {
+    width: 95px;
+    height: 40px;
+    border-radius: 20px;
+    background-color: #1b1e24;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tag-k { font-size: 17px; color: #8b8f96; margin-right: 4px; }
+  .tag-v { font-size: 18px; color: #f0e6d2; }
+  .p-cultivate-txt { color: #bb86fc; }
+  .p-body-txt { color: #ff8a65; }
+  .p-magic-txt { color: #7fb3ff; }
+  .p-tech-txt { color: #6fcf97; }
+
+  .facts {
+    width: 100%;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .fact-row {
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+  }
+
+  .fact {
+    width: 195px;
+    height: 40px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-radius: 14px;
+    background-color: #1b1e24;
+  }
+
+  .fact-k { font-size: 19px; color: #8b8f96; }
+  .fact-v { font-size: 20px; color: #f0e6d2; }
+
+  .pressed { background-color: #7a6438; }
+
+  .empty {
+    width: 100%;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .empty-t { font-size: 28px; color: #f0e6d2; text-align: center; width: 100%; }
+  .empty-s { font-size: 20px; color: #8b8f96; text-align: center; width: 100%; margin-top: 8px; margin-bottom: 22px; }
+</style>

@@ -1,0 +1,304 @@
+<template>
+  <div class="page">
+    <div class="topbar">
+      <text class="t-nav" @click="back">重来</text>
+      <text class="t-title">分配属性</text>
+      <text class="t-nav-r" @click="goCodex">图鉴</text>
+    </div>
+
+    <div class="status" style="height: {{statusH}}px" if="{{!noData}}">
+      <text class="{{left === 0 ? 'pn-ok' : 'pn-warn'}}">剩余点数 {{left}}</text>
+      <text class="t-dim">共 {{total}} 点</text>
+    </div>
+
+    <!-- 中段唯一可滚动区：4 条属性行 + 天赋摘要；底部两个按钮行都在 scroll 之外 -->
+    <scroll class="scroll zone" scroll-y style="height: {{zoneH}}px" if="{{!noData}}">
+      <div class="rows">
+        <div class="arow" for="{{rows}}" style="height: {{rowH}}px">
+          <text class="arow-name {{$item.cls}}">{{$item.short}}</text>
+          <text class="arow-full">{{$item.name}}</text>
+          <div class="bar">
+            <div class="fill {{$item.fillCls}}" style="width: {{$item.w}}px"></div>
+          </div>
+          <text class="arow-val {{$item.cls}}">{{$item.v}}</text>
+          <div class="step {{press === 'm' + $item.k ? 'pressed' : ''}}"
+               @touchstart="down('m' + $item.k)" @touchend="up" @touchcancel="up" @click="dec($item.k)">
+            <text class="step-t">−</text>
+          </div>
+          <div class="step {{press === 'p' + $item.k ? 'pressed' : ''}}"
+               @touchstart="down('p' + $item.k)" @touchend="up" @touchcancel="up" @click="inc($item.k)">
+            <text class="step-t">+</text>
+          </div>
+        </div>
+      </div>
+
+      <div class="talents">
+        <text class="talents-t">{{talentText}}</text>
+      </div>
+    </scroll>
+
+    <div class="btn-row ctrl" style="height: {{ctrlH}}px" if="{{!noData}}">
+      <div class="btn btn-sm grow btn-quiet {{press === 'rand' ? 'pressed' : ''}}"
+           @touchstart="down('rand')" @touchend="up" @touchcancel="up" @click="randomize">
+        <text class="t-btn-sm">随机分配</text>
+      </div>
+      <div class="h-gap"></div>
+      <div class="btn btn-sm grow btn-quiet {{press === 'reset' ? 'pressed' : ''}}"
+           @touchstart="down('reset')" @touchend="up" @touchcancel="up" @click="resetAll">
+        <text class="t-btn-sm">重置</text>
+      </div>
+    </div>
+
+    <div class="btn go {{left === 0 ? 'btn-primary' : 'btn-off'}} {{press === 'go' ? 'pressed' : ''}}"
+         style="height: {{goH}}px"
+         if="{{!noData}}" @touchstart="down('go')" @touchend="up" @touchcancel="up" @click="start">
+      <text class="{{left === 0 ? 't-btn' : 't-btn-off'}}">{{btnText}}</text>
+    </div>
+
+    <!-- 数据兜底：这一局不在（存档被清/异常返回）时显示占位，绝不从 onInit 里跳页 -->
+    <div class="empty" if="{{noData}}">
+      <text class="empty-t">没有进行中的人生</text>
+      <text class="empty-s">存档可能已被清掉，回首页重新开始</text>
+      <div class="btn btn-primary" @click="goHome">
+        <text class="t-btn">回首页</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import app from '../../common/core/app.js'
+  import { alloc, ATTRS, ATTR_NAME, TOTAL_POINTS } from '../../common/core/engine.js'
+  import { randomAlloc, attrRatio } from '../../common/core/attr-util.js'
+  import { attrUI } from '../../common/core/theme.js'
+  import { layoutOf } from '../../common/core/layout.js'
+  import { go } from '../../common/core/nav.js'
+
+  const BAR_W = 132   // 属性进度条轨道宽度（px）
+
+  /** 本页高度总账（纯函数）：固定区块 + 中间滚动区，底部两行按钮不进滚动区 */
+  const LAY = layoutOf('Alloc')
+
+  export default {
+    data: {
+      rows: [],
+      left: TOTAL_POINTS,
+      total: TOTAL_POINTS,
+      talentText: '',
+      btnText: '',
+      noData: false,
+      press: '',
+      // 高度全部来自 common/core/layout.js（432×514 总账），不手写
+      statusH: LAY.blocks.status,
+      zoneH: LAY.blocks.zone,
+      rowH: LAY.rows.h,
+      ctrlH: LAY.blocks.ctrls,
+      goH: LAY.blocks.go
+    },
+
+    onInit() {
+      app.attach(this)
+      const run = app.run
+      // 不跳页：没有这一局就显示占位（旧写法在这里 replace 回首页，
+      // 撞上"页面正在创建"会让页面一直不可见并退出应用——模拟器实测）
+      if (!run) { this.noData = true; return }
+      // 属性从头分配：词条给的点数/效果已经结算过了（chooseTalents 时生效）
+      run.attrs = { iq: 0, eq: 0, hp: 0, luck: 0 }
+      this.talentText = '天赋：' + this.talentNamesOf(run)
+      this.refresh()
+    },
+
+    onShow() {
+      app.attach(this)
+    },
+
+    /** 词条名在抽词条时随 id 一起记进这一局（本页不再 import 400KB 内容池） */
+    talentNamesOf(run) {
+      const names = run.talentNames
+      if (names && names.length) return names.join('、')
+      if (run.talents && run.talents.length) return run.talents.join('、')
+      return '（无）'
+    },
+
+    /** 按压态 */
+    down(k) { this.press = k },
+    up() { this.press = '' },
+
+    refresh() {
+      const run = app.run
+      if (!run) { this.noData = true; return }
+      this.rows = ATTRS.map(k => {
+        const ui = attrUI(k)
+        const v = run.attrs[k]
+        return {
+          k: k,
+          short: ui.short,
+          name: ATTR_NAME[k],
+          cls: ui.cls,
+          fillCls: ui.cls + '-fill',
+          v: v,
+          w: Math.round(attrRatio(v, TOTAL_POINTS) * BAR_W)
+        }
+      })
+      let used = 0
+      for (let i = 0; i < ATTRS.length; i++) used += run.attrs[ATTRS[i]]
+      this.left = TOTAL_POINTS - used
+      this.btnText = this.left === 0 ? '开始人生' : ('还剩 ' + this.left + ' 点')
+    },
+
+    inc(k) {
+      if (!app.run || this.left <= 0) return
+      app.tap()
+      app.run.attrs[k]++
+      this.refresh()
+    },
+
+    dec(k) {
+      if (!app.run || app.run.attrs[k] <= 0) return
+      app.tap()
+      app.run.attrs[k]--
+      this.refresh()
+    },
+
+    /** 随机分配：点数守恒交给纯函数（和恒为 20），测试里用固定 rand 验证过 */
+    randomize() {
+      if (!app.run) return
+      app.tap()
+      const roll = randomAlloc(TOTAL_POINTS, ATTRS, Math.random)
+      for (let i = 0; i < ATTRS.length; i++) app.run.attrs[ATTRS[i]] = roll[ATTRS[i]]
+      this.refresh()
+    },
+
+    resetAll() {
+      if (!app.run) return
+      app.tap()
+      for (let i = 0; i < ATTRS.length; i++) app.run.attrs[ATTRS[i]] = 0
+      this.refresh()
+    },
+
+    start() {
+      if (this.left !== 0 || !app.run) return
+      app.tap()
+      const run = app.run
+      if (!alloc(run, run.attrs)) { this.left = -1; this.btnText = '分配有误'; return }
+      app.saveRun()
+      go('pages/Life', true)
+    },
+
+    // 上一页已被 replace 掉：显式重抽，语义就是"这局不算，重来"
+    back() {
+      app.tap()
+      app.clearRun()
+      go('pages/Talents', true)
+    },
+
+    goCodex() {
+      app.tap()
+      go('pages/Codex', false)
+    },
+
+    goHome() {
+      app.tap()
+      go('pages/Home', true)
+    }
+  }
+</script>
+
+<style>
+  @import '../../common/style/base.css';
+
+  /* 状态行与底部两行按钮的间距与 layout.js 的 gap 对齐（滚动区不占间距） */
+  .status { margin-top: 2px; }
+
+  .rows {
+    width: 100%;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .arow {
+    width: 100%;
+    height: 50px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 12px;
+    padding-right: 8px;
+    margin-bottom: 6px;
+    border-radius: 16px;
+    background-color: #1b1e24;
+    flex-shrink: 0;
+  }
+
+  .arow-name { font-size: 26px; width: 30px; text-align: center; }
+  .arow-full { font-size: 19px; color: #9aa0a8; width: 56px; }
+  .arow-val { font-size: 26px; width: 40px; text-align: center; }
+
+  .bar {
+    width: 132px;
+    height: 12px;
+    border-radius: 6px;
+    background-color: #2b2f36;
+    flex-direction: row;
+    flex-shrink: 0;
+  }
+
+  .fill { height: 12px; border-radius: 6px; flex-shrink: 0; }
+
+  /* 四属性配色（与主题表 theme.js 的 ATTR_UI 对应） */
+  .a-iq { color: #7fb3ff; }
+  .a-eq { color: #ff9ecd; }
+  .a-hp { color: #6fcf97; }
+  .a-luck { color: #ffc857; }
+  .a-iq-fill { background-color: #7fb3ff; }
+  .a-eq-fill { background-color: #ff9ecd; }
+  .a-hp-fill { background-color: #6fcf97; }
+  .a-luck-fill { background-color: #ffc857; }
+
+  .step {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    background-color: #4a4f57;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .step-t { font-size: 28px; color: #ffffff; text-align: center; width: 100%; }
+
+  /* 剩余点数：够 0 是绿，没分完是醒目橙红 */
+  .pn-ok { font-size: 24px; color: #6fcf97; font-weight: bold; }
+  .pn-warn { font-size: 24px; color: #ff8a65; font-weight: bold; }
+
+  .talents {
+    width: 100%;
+    min-height: 46px;
+    border-radius: 16px;
+    background-color: #14161a;
+    padding: 6px 14px 6px 14px;
+    margin-top: 6px;
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .talents-t { font-size: 20px; color: #9aa0a8; }
+
+  /* 随机/重置用矮一档的胶囊，给底部"开始人生"留出高度（两行都在滚动区外） */
+  .btn-sm { height: 52px; border-radius: 26px; }
+  .ctrl { margin-top: 6px; }
+  .go { margin-top: 6px; }
+  .pressed { background-color: #7a6438; }
+  .t-btn-sm { font-size: 24px; color: #ffffff; text-align: center; width: 100%; }
+
+  .empty {
+    width: 100%;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .empty-t { font-size: 28px; color: #f0e6d2; text-align: center; width: 100%; }
+  .empty-s { font-size: 20px; color: #8b8f96; text-align: center; width: 100%; margin-top: 8px; margin-bottom: 22px; }
+</style>

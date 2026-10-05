@@ -1,0 +1,29 @@
+{
+  "name": "gt2-liferestart",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@^9.9.0",
+  "description": "人生重开 · 修仙（vivo WATCH GT 2 移植版）：四条修炼体系 / 抽词条 / 逐年推进 / 词条图鉴",
+  "scripts": {
+    "stats": "node tools/gen-stats.mjs",
+    "test": "node tools/core.test.mjs",
+    "check": "node tools/check-ux.mjs",
+    "lint": "eslint --ext .ux,.js src/"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "semi": false,
+    "printWidth": 100,
+    "tabWidth": 2,
+    "bracketSameLine": true,
+    "htmlWhitespaceSensitivity": "ignore",
+    "vueIndentScriptAndStyle": true,
+    "trailingComma": "es5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.2.0",
+    "eslint": "^7.32.0",
+    "eslint-plugin-json": "^1.4.0",
+    "eslint-plugin-vue": "^9.26.0"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+build
+dist
+sign
+.ide
+.preview.json
+*.log
+.ide
+.preview.json
+.ct-*/

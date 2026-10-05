@@ -1,0 +1,17 @@
+<script>
+  /**
+   * 应用级：把存档读进来（其余状态都在 common/core/app.js 的门面里）。
+   *
+   * 注意：页面与 app 分别打包，公共模块会被内联进各自的字节码，
+   * 模块级变量不是跨页单例（模拟器实测：分配属性页读到的 app.run 是 null → 应用退出）。
+   * 所以这里必须调 attach(this) 把状态挂到应用级对象（this.$def）上，
+   * 页面再在 onInit/onShow 里 attach(this) 接同一份——详见 common/core/shared.js。
+   */
+  import app from './common/core/app.js'
+
+  export default {
+    onCreate() {
+      app.attach(this)
+    },
+  }
+</script>
